@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\SchoolController;
 use App\Http\Controllers\AuthController;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -12,9 +13,12 @@ Route::get('/', function () {
     ]);
 });
 
-Route::prefix('v1')->group(function () {
+Route::prefix('v1')
+    ->withoutMiddleware(ValidateCsrfToken::class)
+    ->group(function () {
     Route::prefix('auth')->group(function () {
         Route::post('register', [AuthController::class, 'register']);
+        Route::post('register-school', [AuthController::class, 'registerSchool']);
         Route::post('login', [AuthController::class, 'login']);
         Route::post('logout', [AuthController::class, 'logout'])->middleware('auth:api');
         Route::get('me', [AuthController::class, 'me'])->middleware('auth:api');
