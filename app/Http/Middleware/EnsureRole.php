@@ -11,8 +11,12 @@ class EnsureRole
     {
         $user = $request->user();
 
+        if ($user) {
+            $user->loadMissing('role');
+        }
+
         if (! $user || ! $user->role || ! in_array($user->role->name, $roles, true)) {
-            abort(403);
+            abort(403, 'Forbidden');
         }
 
         return $next($request);

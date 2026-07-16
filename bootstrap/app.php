@@ -16,6 +16,18 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant' => \App\Http\Middleware\SetCurrentSchool::class,
             'role' => \App\Http\Middleware\EnsureRole::class,
         ]);
+
+        // Never redirect API clients to a web login route.
+        $middleware->redirectGuestsTo(function ($request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return null;
+            }
+
+            return '/login';
+        });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->shouldRenderJsonWhen(function ($request, \Throwable $e) {
+            return $request->is('api/*') || $request->expectsJson();
+        });
     })->create();

@@ -5,10 +5,12 @@ namespace App\Http\Controllers;
 use App\Models\Role;
 use App\Models\School;
 use App\Models\User;
+use App\Support\EducationStages;
+use Database\Seeders\TamisemiSubjectsSeeder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
@@ -23,7 +25,8 @@ class AuthController extends Controller
         $user = User::create([
             'name' => $data['name'],
             'email' => $data['email'],
-            'password' => Hash::make($data['password']),
+            // Password is hashed by the User model cast — do not Hash::make here.
+            'password' => $data['password'],
         ]);
 
         $token = auth()->login($user);
@@ -39,9 +42,19 @@ class AuthController extends Controller
             'admin_name' => ['required', 'string', 'max:255'],
             'admin_email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
             'admin_password' => ['required', 'string', 'min:8'],
+            // Multi-select TAMISEMI stages the school offers
+            'education_stages' => ['required', 'array', 'min:1'],
+            'education_stages.*' => ['required', 'string', Rule::in(EducationStages::keys())],
         ]);
 
-        return DB::transaction(function () use ($data) {
+        $stages = EducationStages::normalize($data['education_stages']);
+        if ($stages === []) {
+            return response()->json([
+                'message' => 'Select at least one education level (e.g. Primary, O-Level).',
+            ], 422);
+        }
+
+        return DB::transaction(function () use ($data, $stages) {
             $code = $data['school_code'] ?? null;
 
             if (! $code) {
@@ -61,6 +74,8 @@ class AuthController extends Controller
                 'name' => $data['school_name'],
                 'code' => $code,
                 'slug' => $slug,
+                'education_stages' => $stages,
+                'education_level' => EducationStages::labelSummary($stages),
             ]);
 
             $role = Role::query()->where('name', 'school_admin')->firstOrFail();
@@ -70,12 +85,16 @@ class AuthController extends Controller
                 'role_id' => $role->id,
                 'name' => $data['admin_name'],
                 'email' => $data['admin_email'],
-                'password' => Hash::make($data['admin_password']),
+                // Hashed by User cast
+                'password' => $data['admin_password'],
             ]);
+
+            // Seed curriculum catalogue only for selected stages
+            (new TamisemiSubjectsSeeder)->seedSchool((int) $school->id, $stages);
 
             $token = auth()->login($admin);
 
-            return $this->respondWithToken($token, $admin, $school);
+            return $this->respondWithToken($token, $admin, $school->fresh());
         });
     }
 
@@ -99,7 +118,25 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        $user = $request->user();
+
+        if (! $user) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Unauthenticated',
+                'data' => [],
+            ], 401);
+        }
+
+        $user->loadMissing('role', 'school');
+
+        return response()->json([
+            'success' => true,
+            'error' => '',
+            'data' => [
+                'user' => $this->serializeUser($user),
+            ],
+        ]);
     }
 
     public function logout()
@@ -127,28 +164,47 @@ class AuthController extends Controller
 
         $user->loadMissing('role', 'school');
 
-        $school = $schoolOverride ?: $user->school;
+        $serialized = $this->serializeUser($user, $schoolOverride);
+        $audience = ($serialized['role']['name'] ?? null) === 'super_admin'
+            ? 'platform'
+            : 'school';
 
         return response()->json([
             'access_token' => $token,
             'token_type' => 'bearer',
             'expires_in' => auth()->factory()->getTTL() * 60,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => $user->role ? [
-                    'id' => $user->role->id,
-                    'name' => $user->role->name,
-                    'label' => $user->role->label,
-                ] : null,
-                'school' => $school ? [
-                    'id' => $school->id,
-                    'name' => $school->name,
-                    'code' => $school->code,
-                    'slug' => $school->slug,
-                ] : null,
-            ],
+            'audience' => $audience,
+            'user' => $serialized,
         ]);
+    }
+
+    /**
+     * Canonical user payload for login / me / refresh — never mix tenants.
+     */
+    protected function serializeUser(User $user, ?School $schoolOverride = null): array
+    {
+        $user->loadMissing('role', 'school');
+        $school = $schoolOverride ?: $user->school;
+
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'school_id' => $user->school_id,
+            'role' => $user->role ? [
+                'id' => $user->role->id,
+                'name' => $user->role->name,
+                'label' => $user->role->label,
+            ] : null,
+            'school' => $school ? [
+                'id' => $school->id,
+                'name' => $school->name,
+                'code' => $school->code,
+                'slug' => $school->slug,
+                'education_stages' => $school->offeredStages(),
+                'education_level' => $school->education_level
+                    ?: EducationStages::labelSummary($school->offeredStages()),
+            ] : null,
+        ];
     }
 }

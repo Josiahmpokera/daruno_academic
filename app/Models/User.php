@@ -67,6 +67,15 @@ class User extends Authenticatable implements JWTSubject
 
     public function getJWTCustomClaims(): array
     {
-        return [];
+        $this->loadMissing('role');
+
+        $roleName = $this->role?->name;
+
+        return [
+            // Audience isolation: platform (super_admin) vs school tenant
+            'aud_type' => $roleName === 'super_admin' ? 'platform' : 'school',
+            'role' => $roleName,
+            'school_id' => $this->school_id,
+        ];
     }
 }

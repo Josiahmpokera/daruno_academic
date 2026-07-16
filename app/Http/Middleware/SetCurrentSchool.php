@@ -19,6 +19,8 @@ class SetCurrentSchool
             $school = School::query()->whereKey($schoolId)->first();
         } elseif ($schoolCode) {
             $school = School::query()->where('code', $schoolCode)->first();
+        } elseif ($request->user()?->school_id) {
+            $school = School::query()->whereKey($request->user()->school_id)->first();
         }
 
         if ($school) {
@@ -28,4 +30,3 @@ class SetCurrentSchool
         return $next($request);
     }
 }
-

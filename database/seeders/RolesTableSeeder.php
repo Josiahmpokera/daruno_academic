@@ -3,8 +3,8 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class RolesTableSeeder extends Seeder
 {
@@ -13,10 +13,17 @@ class RolesTableSeeder extends Seeder
         $now = Carbon::now();
 
         $roles = [
-            ['name' => 'super_admin', 'label' => 'Super Admin'],
+            ['name' => 'super_admin', 'label' => 'Platform Super Admin'],
+            ['name' => 'school_owner', 'label' => 'School Owner'],
             ['name' => 'school_admin', 'label' => 'School Admin'],
-            ['name' => 'teacher', 'label' => 'Teacher'],
+            ['name' => 'head_teacher', 'label' => 'Head Teacher'],
+            ['name' => 'deputy_head', 'label' => 'Deputy Head'],
+            ['name' => 'academic_master', 'label' => 'Academic Master'],
             ['name' => 'accountant', 'label' => 'Accountant'],
+            ['name' => 'teacher', 'label' => 'Teacher'],
+            ['name' => 'librarian', 'label' => 'Librarian'],
+            ['name' => 'store_keeper', 'label' => 'Store Keeper'],
+            ['name' => 'hostel_warden', 'label' => 'Hostel Warden'],
             ['name' => 'parent', 'label' => 'Parent'],
             ['name' => 'student', 'label' => 'Student'],
         ];
@@ -34,4 +41,3 @@ class RolesTableSeeder extends Seeder
         }
     }
 }
-

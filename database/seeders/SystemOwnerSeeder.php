@@ -26,7 +26,7 @@ class SystemOwnerSeeder extends Seeder
         User::query()->create([
             'school_id' => null,
             'role_id' => $roleId,
-            'name' => 'Daruno Owner',
+            'name' => 'Shengena Owner',
             'email' => $email,
             'password' => Hash::make('Daruno123!'),
         ]);
