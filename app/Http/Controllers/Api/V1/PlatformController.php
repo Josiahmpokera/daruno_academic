@@ -11,7 +11,9 @@ use App\Models\Role;
 use App\Models\School;
 use App\Models\SchoolSubscription;
 use App\Models\SubscriptionPlan;
+use App\Models\SystemSetting;
 use App\Models\User;
+use App\Support\EducationStages;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -122,24 +124,113 @@ class PlatformController extends Controller
         try {
             $q = $request->string('q')->toString();
             $status = $request->string('status')->toString();
+            $country = $request->string('country')->toString();
+            $region = $request->string('region')->toString();
+            $district = $request->string('district')->toString();
+            $level = $request->string('level')->toString();
+            $source = $request->string('source')->toString();
+            $sort = $request->string('sort')->toString() ?: 'id';
+            $dir = strtolower($request->string('dir')->toString()) === 'asc' ? 'asc' : 'desc';
 
             $query = School::query()
                 ->with(['currentSubscription.plan'])
-                ->withCount('users')
-                ->orderByDesc('id');
+                ->withCount('users');
 
             if ($q !== '') {
                 $query->where(function ($b) use ($q) {
                     $b->where('name', 'like', "%{$q}%")
                         ->orWhere('code', 'like', "%{$q}%")
-                        ->orWhere('contact_email', 'like', "%{$q}%");
+                        ->orWhere('contact_email', 'like', "%{$q}%")
+                        ->orWhere('region', 'like', "%{$q}%")
+                        ->orWhere('district', 'like', "%{$q}%");
                 });
             }
             if ($status !== '') {
                 $query->where('status', $status);
             }
+            if ($country !== '') {
+                $query->where('country', $country);
+            }
+            if ($region !== '') {
+                $query->where('region', $region);
+            }
+            if ($district !== '') {
+                $query->where('district', $district);
+            }
+            if ($level !== '') {
+                // Match education_stages JSON array (e.g. primary)
+                $query->where(function ($b) use ($level) {
+                    $b->whereJsonContains('education_stages', $level)
+                        ->orWhere('education_level', 'like', '%'.str_replace('_', ' ', $level).'%');
+                });
+            }
+            if ($source !== '') {
+                $query->where('settings->source', $source);
+            }
+
+            $allowedSort = ['id', 'name', 'code', 'region', 'district', 'status', 'created_at'];
+            if (! in_array($sort, $allowedSort, true)) {
+                $sort = 'id';
+            }
+
+            // Keep null regions/districts at the end for registry browsing.
+            if (in_array($sort, ['region', 'district', 'name'], true)) {
+                $query->orderByRaw("CASE WHEN {$sort} IS NULL OR {$sort} = '' THEN 1 ELSE 0 END");
+            }
+            $query->orderBy($sort, $dir);
+            if ($sort === 'region') {
+                $query->orderByRaw("CASE WHEN district IS NULL OR district = '' THEN 1 ELSE 0 END")
+                    ->orderBy('district', 'asc')
+                    ->orderBy('name', 'asc');
+            } elseif ($sort === 'district') {
+                $query->orderBy('name', 'asc');
+            }
+            if ($sort !== 'id') {
+                $query->orderByDesc('id');
+            }
 
             $page = $query->paginate(min(100, max(1, $request->integer('per_page', 25))));
+
+            $filters = null;
+            if ($request->boolean('include_filters') || $country !== '' || $source === 'tanzania_bulk_import') {
+                $filterBase = School::query();
+                if ($country !== '') {
+                    $filterBase->where('country', $country);
+                }
+                if ($source !== '') {
+                    $filterBase->where('settings->source', $source);
+                }
+                if ($level !== '') {
+                    $filterBase->where(function ($b) use ($level) {
+                        $b->whereJsonContains('education_stages', $level)
+                            ->orWhere('education_level', 'like', '%'.str_replace('_', ' ', $level).'%');
+                    });
+                }
+
+                $filters = [
+                    'regions' => (clone $filterBase)
+                        ->whereNotNull('region')
+                        ->where('region', '!=', '')
+                        ->distinct()
+                        ->orderBy('region')
+                        ->pluck('region')
+                        ->values(),
+                    'districts' => (clone $filterBase)
+                        ->when($region !== '', fn ($q) => $q->where('region', $region))
+                        ->whereNotNull('district')
+                        ->where('district', '!=', '')
+                        ->distinct()
+                        ->orderBy('district')
+                        ->pluck('district')
+                        ->values(),
+                    'statuses' => (clone $filterBase)
+                        ->whereNotNull('status')
+                        ->distinct()
+                        ->orderBy('status')
+                        ->pluck('status')
+                        ->values(),
+                ];
+            }
 
             return $this->success([
                 'schools' => $page->items(),
@@ -149,6 +240,7 @@ class PlatformController extends Controller
                     'per_page' => $page->perPage(),
                     'total' => $page->total(),
                 ],
+                'filters' => $filters,
             ]);
         } catch (Throwable $e) {
             return $this->error($e->getMessage(), 500);
@@ -239,6 +331,8 @@ class PlatformController extends Controller
                 'status' => ['sometimes', 'in:pending,active,suspended,rejected'],
                 'contact_email' => ['sometimes', 'nullable', 'email'],
                 'contact_phone' => ['sometimes', 'nullable', 'string', 'max:40'],
+                'region' => ['sometimes', 'nullable', 'string', 'max:120'],
+                'district' => ['sometimes', 'nullable', 'string', 'max:120'],
                 'settings' => ['sometimes', 'array'],
             ]);
 
@@ -254,6 +348,194 @@ class PlatformController extends Controller
             return $this->success([
                 'school' => $school->fresh()->load('currentSubscription.plan'),
             ], 'School updated');
+        } catch (Throwable $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Bulk import Tanzania primary (or other level) schools from spreadsheet rows.
+     * Expected row keys: region, district, school_name, school_code.
+     * Upserts by school_code. Designed for chunked client uploads with progress UI.
+     */
+    public function schoolsBulkImport(Request $request)
+    {
+        try {
+            $data = $request->validate([
+                'schools' => ['required', 'array', 'min:1', 'max:200'],
+                'schools.*.region' => ['required', 'string', 'max:120'],
+                'schools.*.district' => ['required', 'string', 'max:120'],
+                'schools.*.school_name' => ['required', 'string', 'max:255'],
+                'schools.*.school_code' => ['required', 'string', 'max:50'],
+                'level' => ['nullable', 'in:primary,pre_primary,ordinary_level,advanced_level'],
+                'status' => ['nullable', 'in:pending,active,suspended'],
+                'update_existing' => ['nullable', 'boolean'],
+            ]);
+
+            $level = $data['level'] ?? EducationStages::PRIMARY;
+            $status = $data['status'] ?? 'pending';
+            $updateExisting = array_key_exists('update_existing', $data)
+                ? (bool) $data['update_existing']
+                : true;
+
+            $stages = EducationStages::normalize([$level]);
+            if ($stages === []) {
+                $stages = [EducationStages::PRIMARY];
+                $level = EducationStages::PRIMARY;
+            }
+
+            $educationLevelLabel = EducationStages::labelSummary($stages) ?: 'Primary';
+
+            $created = 0;
+            $updated = 0;
+            $skipped = 0;
+            $errors = [];
+            $seenCodes = [];
+
+            DB::transaction(function () use (
+                $data,
+                $request,
+                $status,
+                $updateExisting,
+                $stages,
+                $educationLevelLabel,
+                &$created,
+                &$updated,
+                &$skipped,
+                &$errors,
+                &$seenCodes
+            ) {
+                foreach ($data['schools'] as $index => $row) {
+                    $rowNum = $index + 1;
+                    $code = strtoupper(trim((string) $row['school_code']));
+                    $name = trim((string) $row['school_name']);
+                    $region = trim((string) $row['region']);
+                    $district = trim((string) $row['district']);
+
+                    if ($code === '' || $name === '' || $region === '' || $district === '') {
+                        $errors[] = [
+                            'row' => $rowNum,
+                            'school_code' => $code,
+                            'error' => 'Missing required fields (region, district, school_name, school_code).',
+                        ];
+                        $skipped++;
+
+                        continue;
+                    }
+
+                    if (isset($seenCodes[$code])) {
+                        $errors[] = [
+                            'row' => $rowNum,
+                            'school_code' => $code,
+                            'error' => 'Duplicate school_code in this batch.',
+                        ];
+                        $skipped++;
+
+                        continue;
+                    }
+                    $seenCodes[$code] = true;
+
+                    try {
+                        $existing = School::query()->where('code', $code)->first();
+
+                        if ($existing) {
+                            if (! $updateExisting) {
+                                $skipped++;
+
+                                continue;
+                            }
+
+                            $existing->fill([
+                                'name' => $name,
+                                'region' => $region,
+                                'district' => $district,
+                                'city' => $district,
+                                'country' => 'Tanzania',
+                                'education_level' => $educationLevelLabel,
+                                'education_stages' => $stages,
+                            ]);
+
+                            $settings = is_array($existing->settings) ? $existing->settings : [];
+                            $settings['source'] = $settings['source'] ?? 'tanzania_bulk_import';
+                            $settings['import'] = [
+                                'country' => 'Tanzania',
+                                'level' => $stages[0] ?? EducationStages::PRIMARY,
+                                'region' => $region,
+                                'district' => $district,
+                            ];
+                            $existing->settings = $settings;
+                            $existing->save();
+                            $updated++;
+
+                            continue;
+                        }
+
+                        $baseSlug = Str::slug($name);
+                        if ($baseSlug === '') {
+                            $baseSlug = 'school';
+                        }
+                        $slug = $baseSlug.'-'.Str::lower(Str::random(4));
+                        while (School::query()->where('slug', $slug)->exists()) {
+                            $slug = $baseSlug.'-'.Str::lower(Str::random(4));
+                        }
+
+                        // Registry import only — do not auto-attach a subscription.
+                        // Subscriptions are created when a school is onboarded via platform.
+                        School::query()->create([
+                            'name' => $name,
+                            'code' => $code,
+                            'slug' => $slug,
+                            'status' => $status,
+                            'region' => $region,
+                            'district' => $district,
+                            'city' => $district,
+                            'country' => 'Tanzania',
+                            'education_level' => $educationLevelLabel,
+                            'education_stages' => $stages,
+                            'settings' => [
+                                'source' => 'tanzania_bulk_import',
+                                'import' => [
+                                    'country' => 'Tanzania',
+                                    'level' => $stages[0] ?? EducationStages::PRIMARY,
+                                    'region' => $region,
+                                    'district' => $district,
+                                ],
+                            ],
+                        ]);
+
+                        $created++;
+                    } catch (Throwable $e) {
+                        $errors[] = [
+                            'row' => $rowNum,
+                            'school_code' => $code,
+                            'error' => $e->getMessage(),
+                        ];
+                        $skipped++;
+                    }
+                }
+            });
+
+            $total = count($data['schools']);
+            $this->audit($request, 'school.bulk_import', 'school', null, [
+                'total' => $total,
+                'created' => $created,
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'level' => $level,
+                'country' => 'Tanzania',
+                'error_count' => count($errors),
+            ]);
+
+            return $this->success([
+                'total' => $total,
+                'created' => $created,
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'errors' => array_slice($errors, 0, 50),
+                'error_count' => count($errors),
+                'level' => $level,
+                'country' => 'Tanzania',
+            ], 'Bulk import batch processed');
         } catch (Throwable $e) {
             return $this->error($e->getMessage(), 422);
         }
@@ -308,6 +590,41 @@ class PlatformController extends Controller
             return $this->success([
                 'plans' => $plans->values(),
                 'summary' => $summary,
+            ]);
+        } catch (Throwable $e) {
+            return $this->error($e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Public pricing catalog for the marketing website (active plans only).
+     * No auth required — only non-sensitive plan fields.
+     */
+    public function publicPlansIndex()
+    {
+        try {
+            $plans = SubscriptionPlan::query()
+                ->where('is_active', true)
+                ->orderBy('price')
+                ->orderBy('name')
+                ->get()
+                ->map(function (SubscriptionPlan $plan) {
+                    return [
+                        'id' => $plan->id,
+                        'name' => $plan->name,
+                        'code' => $plan->code,
+                        'billing_cycle' => $plan->billing_cycle,
+                        'price' => (float) $plan->price,
+                        'currency' => $plan->currency ?? 'USD',
+                        'trial_days' => (int) $plan->trial_days,
+                        'max_students' => $plan->max_students,
+                        'max_staff' => $plan->max_staff,
+                        'features' => $plan->features ?? [],
+                    ];
+                });
+
+            return $this->success([
+                'plans' => $plans->values(),
             ]);
         } catch (Throwable $e) {
             return $this->error($e->getMessage(), 500);
@@ -474,22 +791,142 @@ class PlatformController extends Controller
     public function subscriptionsIndex(Request $request)
     {
         try {
+            $q = $request->string('q')->toString();
+            $status = $request->string('status')->toString();
+            // Default: only real/onboarded subscriptions (exclude bulk-registry free trials).
+            $includeBulkTrials = $request->boolean('include_bulk_trials');
+
             $query = SchoolSubscription::query()
-                ->with(['school:id,name,code,status', 'plan'])
+                ->with([
+                    'school:id,name,code,status,contact_email,contact_phone,region,district,country,education_level,settings',
+                    'plan',
+                ])
+                ->whereHas('school')
                 ->orderByDesc('id');
 
-            if ($request->string('status')->toString() !== '') {
-                $query->where('status', $request->string('status')->toString());
+            if ($status !== '') {
+                $query->where('status', $status);
             }
 
-            $page = $query->paginate(min(100, max(1, $request->integer('per_page', 25))));
+            if ($q !== '') {
+                $query->where(function ($b) use ($q) {
+                    $b->whereHas('school', function ($s) use ($q) {
+                        $s->where('name', 'like', "%{$q}%")
+                            ->orWhere('code', 'like', "%{$q}%")
+                            ->orWhere('contact_email', 'like', "%{$q}%");
+                    })->orWhereHas('plan', function ($p) use ($q) {
+                        $p->where('name', 'like', "%{$q}%")
+                            ->orWhere('code', 'like', "%{$q}%");
+                    });
+                });
+            }
+
+            // Exclude auto-created trials from Tanzania bulk school registry.
+            // Those schools are directory records, not paying / onboarded tenants.
+            if (! $includeBulkTrials) {
+                $query->where(function ($b) {
+                    $b->where('status', '!=', 'trial')
+                        ->orWhereHas('school', function ($s) {
+                            $s->where(function ($inner) {
+                                $inner->whereNull('settings')
+                                    ->orWhereNull('settings->source')
+                                    ->orWhere('settings->source', '!=', 'tanzania_bulk_import');
+                            });
+                        });
+                });
+            }
+
+            $page = $query->paginate(min(100, max(1, $request->integer('per_page', 50))));
+
+            $items = collect($page->items())->map(function (SchoolSubscription $sub) {
+                $school = $sub->school;
+                $admin = null;
+                if ($school) {
+                    $admin = User::query()
+                        ->where('school_id', $school->id)
+                        ->with('role:id,name,label')
+                        ->orderBy('id')
+                        ->first(['id', 'name', 'email', 'phone', 'role_id', 'school_id']);
+                }
+
+                return [
+                    'id' => $sub->id,
+                    'school_id' => $sub->school_id,
+                    'plan_id' => $sub->plan_id,
+                    'status' => $sub->status,
+                    'starts_on' => $sub->starts_on?->toDateString(),
+                    'ends_on' => $sub->ends_on?->toDateString(),
+                    'trial_ends_on' => $sub->trial_ends_on?->toDateString(),
+                    'auto_renew' => (bool) $sub->auto_renew,
+                    'created_at' => $sub->created_at,
+                    'updated_at' => $sub->updated_at,
+                    'school' => $school ? [
+                        'id' => $school->id,
+                        'name' => $school->name,
+                        'code' => $school->code,
+                        'status' => $school->status,
+                        'contact_email' => $school->contact_email,
+                        'contact_phone' => $school->contact_phone,
+                        'region' => $school->region,
+                        'district' => $school->district,
+                        'country' => $school->country,
+                        'education_level' => $school->education_level,
+                        'source' => is_array($school->settings) ? ($school->settings['source'] ?? null) : null,
+                    ] : null,
+                    'plan' => $sub->plan ? [
+                        'id' => $sub->plan->id,
+                        'name' => $sub->plan->name,
+                        'code' => $sub->plan->code,
+                        'billing_cycle' => $sub->plan->billing_cycle,
+                        'price' => (float) $sub->plan->price,
+                        'currency' => $sub->plan->currency,
+                    ] : null,
+                    'admin_user' => $admin ? [
+                        'id' => $admin->id,
+                        'name' => $admin->name,
+                        'email' => $admin->email,
+                        'phone' => $admin->phone,
+                        'role' => $admin->role ? [
+                            'name' => $admin->role->name,
+                            'label' => $admin->role->label,
+                        ] : null,
+                    ] : null,
+                ];
+            })->values();
+
+            // Summary for real subscriptions only (same filter as list)
+            $summaryBase = SchoolSubscription::query()->whereHas('school');
+            if (! $includeBulkTrials) {
+                $summaryBase->where(function ($b) {
+                    $b->where('status', '!=', 'trial')
+                        ->orWhereHas('school', function ($s) {
+                            $s->where(function ($inner) {
+                                $inner->whereNull('settings')
+                                    ->orWhereNull('settings->source')
+                                    ->orWhere('settings->source', '!=', 'tanzania_bulk_import');
+                            });
+                        });
+                });
+            }
+
+            $summary = [
+                'total' => (clone $summaryBase)->count(),
+                'active' => (clone $summaryBase)->where('status', 'active')->count(),
+                'trial' => (clone $summaryBase)->where('status', 'trial')->count(),
+                'past_due' => (clone $summaryBase)->where('status', 'past_due')->count(),
+                'cancelled' => (clone $summaryBase)->where('status', 'cancelled')->count(),
+                'expired' => (clone $summaryBase)->where('status', 'expired')->count(),
+            ];
 
             return $this->success([
-                'subscriptions' => $page->items(),
+                'subscriptions' => $items,
                 'meta' => [
                     'current_page' => $page->currentPage(),
+                    'last_page' => $page->lastPage(),
+                    'per_page' => $page->perPage(),
                     'total' => $page->total(),
                 ],
+                'summary' => $summary,
             ]);
         } catch (Throwable $e) {
             return $this->error($e->getMessage(), 500);
@@ -740,27 +1177,80 @@ class PlatformController extends Controller
     public function settingsShow()
     {
         try {
+            $raw = SystemSetting::platformAll();
+
             return $this->success([
-                'settings' => [
-                    'app_name' => 'Shengena',
-                    'support_email' => 'support@shengena.app',
-                    'default_currency' => 'USD',
-                    'default_trial_days' => 14,
-                    'allow_self_registration' => true,
-                    'require_school_approval' => true,
-                    'auth' => [
-                        'jwt_ttl_minutes' => config('jwt.ttl', 60),
-                        'password_min_length' => 8,
-                    ],
-                    'notifications' => [
-                        'email_enabled' => true,
-                        'sms_enabled' => false,
-                    ],
-                ],
+                'settings' => $this->formatPlatformSettings($raw),
             ]);
         } catch (Throwable $e) {
             return $this->error($e->getMessage(), 500);
         }
+    }
+
+    public function settingsUpdate(Request $request)
+    {
+        try {
+            $data = $request->validate([
+                'app_name' => ['sometimes', 'string', 'max:120'],
+                'support_email' => ['sometimes', 'email', 'max:255'],
+                'default_currency' => ['sometimes', 'string', 'size:3'],
+                'default_trial_days' => ['sometimes', 'integer', 'min:0', 'max:365'],
+                'allow_self_registration' => ['sometimes', 'boolean'],
+                'require_school_approval' => ['sometimes', 'boolean'],
+                'jwt_ttl_minutes' => ['sometimes', 'integer', 'min:5', 'max:10080'],
+                'password_min_length' => ['sometimes', 'integer', 'min:6', 'max:32'],
+                'email_enabled' => ['sometimes', 'boolean'],
+                'sms_enabled' => ['sometimes', 'boolean'],
+            ]);
+
+            // Normalize currency to uppercase ISO-like code
+            if (isset($data['default_currency'])) {
+                $data['default_currency'] = strtoupper($data['default_currency']);
+            }
+
+            $raw = SystemSetting::platformUpdate($data);
+
+            $this->audit($request, 'platform.settings.updated', 'system_setting', null, [
+                'keys' => array_keys($data),
+            ]);
+
+            return $this->success([
+                'settings' => $this->formatPlatformSettings($raw),
+            ], 'Settings saved');
+        } catch (Throwable $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Shape settings for the portal (nested groups for display + flat keys for forms).
+     *
+     * @param  array<string, mixed>  $raw
+     * @return array<string, mixed>
+     */
+    protected function formatPlatformSettings(array $raw): array
+    {
+        return [
+            'app_name' => (string) ($raw['app_name'] ?? 'Shengena'),
+            'support_email' => (string) ($raw['support_email'] ?? ''),
+            'default_currency' => (string) ($raw['default_currency'] ?? 'USD'),
+            'default_trial_days' => (int) ($raw['default_trial_days'] ?? 14),
+            'allow_self_registration' => (bool) ($raw['allow_self_registration'] ?? true),
+            'require_school_approval' => (bool) ($raw['require_school_approval'] ?? true),
+            'jwt_ttl_minutes' => (int) ($raw['jwt_ttl_minutes'] ?? config('jwt.ttl', 60)),
+            'password_min_length' => (int) ($raw['password_min_length'] ?? 8),
+            'email_enabled' => (bool) ($raw['email_enabled'] ?? true),
+            'sms_enabled' => (bool) ($raw['sms_enabled'] ?? false),
+            // Nested aliases for secondary settings pages
+            'auth' => [
+                'jwt_ttl_minutes' => (int) ($raw['jwt_ttl_minutes'] ?? config('jwt.ttl', 60)),
+                'password_min_length' => (int) ($raw['password_min_length'] ?? 8),
+            ],
+            'notifications' => [
+                'email_enabled' => (bool) ($raw['email_enabled'] ?? true),
+                'sms_enabled' => (bool) ($raw['sms_enabled'] ?? false),
+            ],
+        ];
     }
 
     // ── Audit logs ────────────────────────────────────────────────

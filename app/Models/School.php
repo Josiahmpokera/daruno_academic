@@ -26,6 +26,7 @@ class School extends Model
         'address',
         'city',
         'region',
+        'district',
         'country',
         'website',
         'motto',

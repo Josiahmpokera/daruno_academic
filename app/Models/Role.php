@@ -13,10 +13,19 @@ class Role extends Model
         'name',
         'label',
         'permissions',
+        'scope',
+        'is_system',
     ];
 
     protected $casts = [
         'permissions' => 'array',
+        'is_system' => 'boolean',
     ];
+
+    public function permissionRows()
+    {
+        return $this->belongsToMany(Permission::class, 'role_permission')->withTimestamps();
+    }
 }
+
 

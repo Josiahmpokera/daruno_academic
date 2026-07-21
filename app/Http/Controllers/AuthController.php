@@ -106,12 +106,38 @@ class AuthController extends Controller
         ]);
 
         if (! $token = auth()->attempt($credentials)) {
+            try {
+                \App\Models\LoginHistory::query()->create([
+                    'school_id' => null,
+                    'user_id' => null,
+                    'email' => $credentials['email'],
+                    'status' => 'failed',
+                    'ip_address' => $request->ip(),
+                    'user_agent' => substr((string) $request->userAgent(), 0, 250),
+                    'logged_in_at' => now(),
+                ]);
+            } catch (\Throwable) {
+            }
+
             return response()->json([
                 'message' => 'Invalid credentials',
             ], 401);
         }
 
         $user = auth()->user();
+
+        try {
+            \App\Models\LoginHistory::query()->create([
+                'school_id' => $user?->school_id,
+                'user_id' => $user?->id,
+                'email' => $user?->email,
+                'status' => 'success',
+                'ip_address' => $request->ip(),
+                'user_agent' => substr((string) $request->userAgent(), 0, 250),
+                'logged_in_at' => now(),
+            ]);
+        } catch (\Throwable) {
+        }
 
         return $this->respondWithToken($token, $user);
     }

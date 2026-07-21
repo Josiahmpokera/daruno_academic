@@ -38,6 +38,11 @@ class Student extends Model
         'admission_date',
         'status',
         'notes',
+        'alumni_year',
+        'alumni_phone',
+        'alumni_email',
+        'alumni_occupation',
+        'alumni_notes',
     ];
 
     protected $casts = [
@@ -53,6 +58,26 @@ class Student extends Model
     public function guardians(): HasMany
     {
         return $this->hasMany(StudentGuardian::class);
+    }
+
+    public function healthRecord()
+    {
+        return $this->hasOne(StudentHealthRecord::class);
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(StudentDocument::class);
+    }
+
+    public function transfers(): HasMany
+    {
+        return $this->hasMany(StudentTransfer::class);
+    }
+
+    public function graduation()
+    {
+        return $this->hasOne(StudentGraduation::class);
     }
 
     public function currentEnrollment()

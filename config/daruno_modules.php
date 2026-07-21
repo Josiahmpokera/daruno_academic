@@ -228,9 +228,10 @@ return [
             'features' => [
                 'fee_structure',
                 'billing',
+                'payment_methods',
+                'student_fees',
                 'invoices',
                 'payments',
-                'payment_methods',
                 'scholarships',
                 'discounts',
                 'fines',

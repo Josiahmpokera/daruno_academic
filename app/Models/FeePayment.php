@@ -12,14 +12,18 @@ class FeePayment extends Model
         'student_id',
         'invoice_id',
         'amount',
+        'refunded_amount',
         'method',
         'reference',
+        'receipt_number',
         'paid_at',
         'status',
+        'notes',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'refunded_amount' => 'decimal:2',
         'paid_at' => 'datetime',
     ];
 
