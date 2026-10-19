@@ -22,6 +22,7 @@ use App\Models\Student;
 use App\Models\SystemSetting;
 use App\Models\User;
 use App\Models\Webhook;
+use App\Support\TenantAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
@@ -364,13 +365,14 @@ class SystemController extends Controller
         try {
             $this->ensureSchoolRolesAndPermissions();
             $scope = $request->string('scope')->toString();
-            $q = Role::query()->orderBy('label');
+            $schoolId = $this->schoolId($request);
+            $q = Role::query()->where('name', '!=', 'super_admin')->orderBy('label');
             if ($scope !== '') {
                 $q->where('scope', $scope);
             } else {
                 $q->whereIn('scope', ['school', 'family']);
             }
-            $roles = $q->get()->map(function (Role $r) {
+            $roles = $q->get()->map(function (Role $r) use ($schoolId) {
                 return [
                     'id' => $r->id,
                     'name' => $r->name,
@@ -378,7 +380,8 @@ class SystemController extends Controller
                     'scope' => $r->scope ?? 'school',
                     'is_system' => (bool) $r->is_system,
                     'permissions' => $r->permissions ?? [],
-                    'users_count' => User::query()->where('role_id', $r->id)->count(),
+                    'users_count' => User::query()->where('school_id', $schoolId)->where('role_id', $r->id)->count(),
+                    'editable' => false,
                 ];
             });
 
@@ -391,6 +394,11 @@ class SystemController extends Controller
     public function rolesUpdate(Request $request, int $id)
     {
         try {
+            // Roles are shared by every school: a school editing one would change
+            // it for all tenants. Only the platform owner may edit role definitions.
+            if (! TenantAccess::isPlatformAdmin($request->user())) {
+                return $this->error('Roles are shared across schools and can only be changed by Shengena platform admins.', 403);
+            }
             $role = Role::query()->findOrFail($id);
             if (($role->name ?? '') === 'super_admin') {
                 return $this->error('Platform role cannot be edited here', 422);

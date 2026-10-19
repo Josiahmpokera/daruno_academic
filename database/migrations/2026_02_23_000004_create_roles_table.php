@@ -17,6 +17,8 @@ return new class extends Migration
         });
 
         Schema::table('users', function (Blueprint $table) {
+            // Drop the index first so this also works on SQLite (test suite).
+            $table->dropIndex(['role']);
             $table->dropColumn('role');
             $table->foreignId('role_id')
                 ->after('phone')

@@ -10,6 +10,7 @@ use App\Models\AssessmentResult;
 use App\Models\Enrollment;
 use App\Models\School;
 use App\Models\Student;
+use App\Models\GradingSystem;
 use App\Support\NectaGrading;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -32,21 +33,51 @@ class ExaminationController extends Controller
         ['value' => 'project', 'label' => 'Project / portfolio', 'group' => 'formative'],
     ];
 
-    public function typesIndex()
+    public function typesIndex(Request $request)
     {
+        $grading = [
+            'scale' => 'NECTA-oriented (CSEE/ACSEE style bands)',
+            'bands' => [
+                ['grade' => 'A', 'min_percent' => 75, 'points' => 1, 'remark' => 'Excellent'],
+                ['grade' => 'B', 'min_percent' => 65, 'points' => 2, 'remark' => 'Very Good'],
+                ['grade' => 'C', 'min_percent' => 45, 'points' => 3, 'remark' => 'Good'],
+                ['grade' => 'D', 'min_percent' => 30, 'points' => 4, 'remark' => 'Satisfactory'],
+                ['grade' => 'F', 'min_percent' => 0, 'points' => 5, 'remark' => 'Fail'],
+            ],
+            'division' => 'From average grade points (lower is better): I–IV, 0',
+            'pass_mark' => 30,
+            'grading_system_id' => null,
+        ];
+
+        try {
+            $schoolId = $this->schoolId($request);
+            $system = GradingSystem::query()
+                ->where('school_id', $schoolId)
+                ->where('is_default', true)
+                ->where('is_active', true)
+                ->with('bands')
+                ->first();
+            if ($system && $system->bands->isNotEmpty()) {
+                $grading = [
+                    'scale' => $system->name,
+                    'bands' => $system->bands->map(fn ($b) => [
+                        'grade' => $b->grade,
+                        'min_percent' => (float) $b->min_percent,
+                        'points' => (int) $b->points,
+                        'remark' => $b->remark,
+                    ])->values()->all(),
+                    'division' => 'From average grade points (lower is better): I–IV, 0',
+                    'pass_mark' => (float) $system->pass_mark,
+                    'grading_system_id' => $system->id,
+                ];
+            }
+        } catch (Throwable $e) {
+            // fall back to built-in NECTA bands
+        }
+
         return $this->success([
             'types' => self::TYPES,
-            'grading' => [
-                'scale' => 'NECTA-oriented (CSEE/ACSEE style bands)',
-                'bands' => [
-                    ['grade' => 'A', 'min_percent' => 75, 'points' => 1, 'remark' => 'Excellent'],
-                    ['grade' => 'B', 'min_percent' => 65, 'points' => 2, 'remark' => 'Very Good'],
-                    ['grade' => 'C', 'min_percent' => 45, 'points' => 3, 'remark' => 'Good'],
-                    ['grade' => 'D', 'min_percent' => 30, 'points' => 4, 'remark' => 'Satisfactory'],
-                    ['grade' => 'F', 'min_percent' => 0, 'points' => 5, 'remark' => 'Fail'],
-                ],
-                'division' => 'From average grade points (lower is better): I–IV, 0',
-            ],
+            'grading' => $grading,
         ]);
     }
 

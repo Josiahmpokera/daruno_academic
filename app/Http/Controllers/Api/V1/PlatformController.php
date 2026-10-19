@@ -1187,6 +1187,22 @@ class PlatformController extends Controller
         }
     }
 
+    /**
+     * Public marketing site content (footer, contact, branding).
+     */
+    public function publicSiteContent()
+    {
+        try {
+            $raw = SystemSetting::platformAll();
+
+            return $this->success([
+                'site' => $this->formatPublicSite($raw),
+            ]);
+        } catch (Throwable $e) {
+            return $this->error($e->getMessage(), 500);
+        }
+    }
+
     public function settingsUpdate(Request $request)
     {
         try {
@@ -1201,6 +1217,21 @@ class PlatformController extends Controller
                 'password_min_length' => ['sometimes', 'integer', 'min:6', 'max:32'],
                 'email_enabled' => ['sometimes', 'boolean'],
                 'sms_enabled' => ['sometimes', 'boolean'],
+                // Website / footer (super-admin managed)
+                'website_tagline' => ['sometimes', 'nullable', 'string', 'max:200'],
+                'website_subtitle' => ['sometimes', 'nullable', 'string', 'max:500'],
+                'website_phone' => ['sometimes', 'nullable', 'string', 'max:40'],
+                'website_address' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'website_facebook' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'website_twitter' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'website_linkedin' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'website_instagram' => ['sometimes', 'nullable', 'string', 'max:255'],
+                'website_copyright' => ['sometimes', 'nullable', 'string', 'max:200'],
+                'website_footer_columns' => ['sometimes', 'array'],
+                'website_footer_columns.*.title' => ['required_with:website_footer_columns', 'string', 'max:80'],
+                'website_footer_columns.*.links' => ['nullable', 'array'],
+                'website_footer_columns.*.links.*.label' => ['required', 'string', 'max:80'],
+                'website_footer_columns.*.links.*.href' => ['required', 'string', 'max:255'],
             ]);
 
             // Normalize currency to uppercase ISO-like code
@@ -1230,6 +1261,8 @@ class PlatformController extends Controller
      */
     protected function formatPlatformSettings(array $raw): array
     {
+        $site = $this->formatPublicSite($raw);
+
         return [
             'app_name' => (string) ($raw['app_name'] ?? 'Shengena'),
             'support_email' => (string) ($raw['support_email'] ?? ''),
@@ -1241,6 +1274,17 @@ class PlatformController extends Controller
             'password_min_length' => (int) ($raw['password_min_length'] ?? 8),
             'email_enabled' => (bool) ($raw['email_enabled'] ?? true),
             'sms_enabled' => (bool) ($raw['sms_enabled'] ?? false),
+            // Website (flat for super-admin form)
+            'website_tagline' => $site['tagline'],
+            'website_subtitle' => $site['subtitle'],
+            'website_phone' => $site['phone'],
+            'website_address' => $site['address'],
+            'website_facebook' => $site['social']['facebook'] ?? '',
+            'website_twitter' => $site['social']['twitter'] ?? '',
+            'website_linkedin' => $site['social']['linkedin'] ?? '',
+            'website_instagram' => $site['social']['instagram'] ?? '',
+            'website_copyright' => $site['copyright'],
+            'website_footer_columns' => $site['footer_columns'],
             // Nested aliases for secondary settings pages
             'auth' => [
                 'jwt_ttl_minutes' => (int) ($raw['jwt_ttl_minutes'] ?? config('jwt.ttl', 60)),
@@ -1250,6 +1294,49 @@ class PlatformController extends Controller
                 'email_enabled' => (bool) ($raw['email_enabled'] ?? true),
                 'sms_enabled' => (bool) ($raw['sms_enabled'] ?? false),
             ],
+            'website' => $site,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $raw
+     * @return array<string, mixed>
+     */
+    protected function formatPublicSite(array $raw): array
+    {
+        $columns = $raw['website_footer_columns'] ?? null;
+        if (! is_array($columns) || $columns === []) {
+            $columns = SystemSetting::defaults()['website_footer_columns'];
+        }
+
+        $copyright = (string) ($raw['website_copyright'] ?? '© {year} Shengena. All rights reserved.');
+        $copyright = str_replace('{year}', (string) now()->year, $copyright);
+
+        return [
+            'app_name' => (string) ($raw['app_name'] ?? 'Shengena'),
+            'tagline' => (string) ($raw['website_tagline'] ?? 'One classroom, one system.'),
+            'subtitle' => (string) ($raw['website_subtitle'] ?? ''),
+            'support_email' => (string) ($raw['support_email'] ?? 'support@shengena.app'),
+            'phone' => (string) ($raw['website_phone'] ?? ''),
+            'address' => (string) ($raw['website_address'] ?? ''),
+            'copyright' => $copyright,
+            'social' => [
+                'facebook' => (string) ($raw['website_facebook'] ?? ''),
+                'twitter' => (string) ($raw['website_twitter'] ?? ''),
+                'linkedin' => (string) ($raw['website_linkedin'] ?? ''),
+                'instagram' => (string) ($raw['website_instagram'] ?? ''),
+            ],
+            'footer_columns' => array_values(array_map(function ($col) {
+                return [
+                    'title' => (string) ($col['title'] ?? ''),
+                    'links' => array_values(array_map(function ($link) {
+                        return [
+                            'label' => (string) ($link['label'] ?? ''),
+                            'href' => (string) ($link['href'] ?? '#'),
+                        ];
+                    }, is_array($col['links'] ?? null) ? $col['links'] : [])),
+                ];
+            }, $columns)),
         ];
     }
 

@@ -16,10 +16,13 @@ class EnsureRole
         }
 
         if (! $user || ! $user->role || ! in_array($user->role->name, $roles, true)) {
-            abort(403, 'Forbidden');
+            return response()->json([
+                'success' => false,
+                'error' => 'Forbidden',
+                'data' => (object) [],
+            ], 403);
         }
 
         return $next($request);
     }
 }
-

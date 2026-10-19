@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Concerns;
 
 use App\Models\School;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Exists;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 trait ResolvesSchool
@@ -32,5 +34,13 @@ trait ResolvesSchool
     protected function schoolId(Request $request): int
     {
         return (int) $this->school($request)->id;
+    }
+
+    /**
+     * Validation rule: the ID must exist in $table AND belong to the current school.
+     */
+    protected function tenantExists(Request $request, string $table, string $column = 'id'): Exists
+    {
+        return Rule::exists($table, $column)->where('school_id', $this->schoolId($request));
     }
 }

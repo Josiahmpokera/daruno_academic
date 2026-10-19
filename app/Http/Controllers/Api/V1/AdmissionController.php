@@ -207,8 +207,8 @@ class AdmissionController extends Controller
                 'previous_class' => ['sometimes', 'nullable', 'string', 'max:80'],
                 'preferred_level' => ['sometimes', 'nullable', 'string', 'max:80'],
                 'address' => ['sometimes', 'nullable', 'string', 'max:255'],
-                'academic_year_id' => ['sometimes', 'nullable', 'integer', 'exists:academic_years,id'],
-                'classroom_id' => ['sometimes', 'nullable', 'integer', 'exists:classrooms,id'],
+                'academic_year_id' => ['sometimes', 'nullable', 'integer', $this->tenantExists($request, 'academic_years')],
+                'classroom_id' => ['sometimes', 'nullable', 'integer', $this->tenantExists($request, 'classrooms')],
                 'notes' => ['sometimes', 'nullable', 'string'],
                 'status' => ['sometimes', 'in:pending,approved,rejected,enrolled,withdrawn'],
                 'rejection_reason' => ['sometimes', 'nullable', 'string'],
@@ -242,8 +242,8 @@ class AdmissionController extends Controller
             }
 
             $data = $request->validate([
-                'classroom_id' => ['nullable', 'integer', 'exists:classrooms,id'],
-                'academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
+                'classroom_id' => ['nullable', 'integer', $this->tenantExists($request, 'classrooms')],
+                'academic_year_id' => ['nullable', 'integer', $this->tenantExists($request, 'academic_years')],
                 'admission_number' => ['nullable', 'string', 'max:50'],
             ]);
 

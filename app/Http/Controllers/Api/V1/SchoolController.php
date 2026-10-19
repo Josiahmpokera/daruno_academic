@@ -7,6 +7,7 @@ use App\Http\Controllers\Concerns\ApiResponds;
 use App\Models\Role;
 use App\Models\School;
 use App\Models\User;
+use App\Support\TenantAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -91,9 +92,13 @@ class SchoolController extends Controller
         }
     }
 
-    public function show(School $school)
+    public function show(Request $request, School $school)
     {
         try {
+            if ($denied = $this->denyOtherSchool($request, $school)) {
+                return $denied;
+            }
+
             return $this->success([
                 'school' => $school,
             ]);
@@ -105,6 +110,10 @@ class SchoolController extends Controller
     public function update(Request $request, School $school)
     {
         try {
+            if ($denied = $this->denyOtherSchool($request, $school)) {
+                return $denied;
+            }
+
             $data = $request->validate([
                 'name' => ['sometimes', 'string', 'max:255'],
                 'settings' => ['sometimes', 'array'],
@@ -119,5 +128,22 @@ class SchoolController extends Controller
         } catch (Throwable $e) {
             return $this->error($e->getMessage(), 422);
         }
+    }
+
+    /**
+     * Tenant isolation: a school user may only see / edit the school they belong to.
+     */
+    protected function denyOtherSchool(Request $request, School $school)
+    {
+        $current = $request->attributes->get('school');
+        if (TenantAccess::isPlatformAdmin($request->user()) && ! $current) {
+            return null;
+        }
+
+        if (! $current || (int) $current->id !== (int) $school->id) {
+            return $this->error('You do not have access to this school.', 403);
+        }
+
+        return null;
     }
 }

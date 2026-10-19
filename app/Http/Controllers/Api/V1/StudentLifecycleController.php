@@ -86,7 +86,7 @@ class StudentLifecycleController extends Controller
         try {
             $schoolId = $this->schoolId($request);
             $data = $request->validate([
-                'student_id' => ['required', 'integer', 'exists:students,id'],
+                'student_id' => ['required', 'integer', $this->tenantExists($request, 'students')],
                 'direction' => ['required', 'in:outgoing,incoming'],
                 'other_school_name' => ['nullable', 'string', 'max:255'],
                 'other_school_code' => ['nullable', 'string', 'max:80'],
@@ -280,9 +280,9 @@ class StudentLifecycleController extends Controller
         try {
             $schoolId = $this->schoolId($request);
             $data = $request->validate([
-                'student_id' => ['required', 'integer', 'exists:students,id'],
-                'academic_year_id' => ['nullable', 'integer', 'exists:academic_years,id'],
-                'classroom_id' => ['nullable', 'integer', 'exists:classrooms,id'],
+                'student_id' => ['required', 'integer', $this->tenantExists($request, 'students')],
+                'academic_year_id' => ['nullable', 'integer', $this->tenantExists($request, 'academic_years')],
+                'classroom_id' => ['nullable', 'integer', $this->tenantExists($request, 'classrooms')],
                 'graduation_date' => ['nullable', 'date'],
                 'certificate_number' => ['nullable', 'string', 'max:80'],
                 'level_completed' => ['nullable', 'string', 'max:80'],
@@ -339,8 +339,8 @@ class StudentLifecycleController extends Controller
                 ->findOrFail($id);
 
             $data = $request->validate([
-                'academic_year_id' => ['sometimes', 'nullable', 'integer', 'exists:academic_years,id'],
-                'classroom_id' => ['sometimes', 'nullable', 'integer', 'exists:classrooms,id'],
+                'academic_year_id' => ['sometimes', 'nullable', 'integer', $this->tenantExists($request, 'academic_years')],
+                'classroom_id' => ['sometimes', 'nullable', 'integer', $this->tenantExists($request, 'classrooms')],
                 'graduation_date' => ['sometimes', 'nullable', 'date'],
                 'certificate_number' => ['sometimes', 'nullable', 'string', 'max:80'],
                 'level_completed' => ['sometimes', 'nullable', 'string', 'max:80'],

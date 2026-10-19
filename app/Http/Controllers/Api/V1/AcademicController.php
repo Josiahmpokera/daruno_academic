@@ -454,8 +454,8 @@ class AcademicController extends Controller
             $data = $request->validate([
                 'name' => ['required', 'string', 'max:100'],
                 'code' => ['nullable', 'string', 'max:50'],
-                'education_level_id' => ['nullable', 'integer', 'exists:education_levels,id'],
-                'stream_id' => ['nullable', 'integer', 'exists:streams,id'],
+                'education_level_id' => ['nullable', 'integer', $this->tenantExists($request, 'education_levels')],
+                'stream_id' => ['nullable', 'integer', $this->tenantExists($request, 'streams')],
                 'capacity' => ['nullable', 'integer', 'min:1'],
                 'is_active' => ['nullable', 'boolean'],
             ]);
@@ -490,8 +490,8 @@ class AcademicController extends Controller
             $data = $request->validate([
                 'name' => ['sometimes', 'string', 'max:100'],
                 'code' => ['sometimes', 'nullable', 'string', 'max:50'],
-                'education_level_id' => ['sometimes', 'nullable', 'integer', 'exists:education_levels,id'],
-                'stream_id' => ['sometimes', 'nullable', 'integer', 'exists:streams,id'],
+                'education_level_id' => ['sometimes', 'nullable', 'integer', $this->tenantExists($request, 'education_levels')],
+                'stream_id' => ['sometimes', 'nullable', 'integer', $this->tenantExists($request, 'streams')],
                 'capacity' => ['sometimes', 'nullable', 'integer', 'min:1'],
                 'is_active' => ['sometimes', 'boolean'],
             ]);

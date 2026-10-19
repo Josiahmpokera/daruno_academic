@@ -27,13 +27,49 @@ class SystemSetting extends Model
             'app_name' => 'Shengena',
             'support_email' => 'support@shengena.app',
             'default_currency' => 'USD',
-            'default_trial_days' => 14,
+            'default_trial_days' => 15,
             'allow_self_registration' => true,
             'require_school_approval' => true,
             'jwt_ttl_minutes' => (int) config('jwt.ttl', 60),
             'password_min_length' => 8,
             'email_enabled' => true,
             'sms_enabled' => false,
+            // Marketing website (public landing)
+            'website_tagline' => 'One classroom, one system.',
+            'website_subtitle' => 'Shengena gives private schools everything they need to manage students, staff, fees, exams, and parent communication — in one place.',
+            'website_phone' => '',
+            'website_address' => 'Dar es Salaam, Tanzania',
+            'website_facebook' => '',
+            'website_twitter' => '',
+            'website_linkedin' => '',
+            'website_instagram' => '',
+            'website_copyright' => '© {year} Shengena. All rights reserved.',
+            'website_footer_columns' => [
+                [
+                    'title' => 'Product',
+                    'links' => [
+                        ['label' => 'Features', 'href' => '/features'],
+                        ['label' => 'Pricing', 'href' => '/#pricing'],
+                        ['label' => 'Register school', 'href' => '/register-school'],
+                        ['label' => 'Join a school', 'href' => '/apply'],
+                    ],
+                ],
+                [
+                    'title' => 'Company',
+                    'links' => [
+                        ['label' => 'About', 'href' => '/#about'],
+                        ['label' => 'Contact', 'href' => '/#contact'],
+                        ['label' => 'Support', 'href' => '/#support'],
+                    ],
+                ],
+                [
+                    'title' => 'Legal',
+                    'links' => [
+                        ['label' => 'Privacy', 'href' => '/#privacy'],
+                        ['label' => 'Terms', 'href' => '/#terms'],
+                    ],
+                ],
+            ],
         ];
     }
 
@@ -95,6 +131,7 @@ class SystemSetting extends Model
             is_bool($default) => 'boolean',
             is_int($default) => 'integer',
             is_float($default) => 'float',
+            is_array($default) => 'json',
             default => 'string',
         };
     }

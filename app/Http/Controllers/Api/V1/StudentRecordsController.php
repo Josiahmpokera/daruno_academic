@@ -78,7 +78,7 @@ class StudentRecordsController extends Controller
         try {
             $schoolId = $this->schoolId($request);
             $data = $request->validate([
-                'student_id' => ['required', 'integer', 'exists:students,id'],
+                'student_id' => ['required', 'integer', $this->tenantExists($request, 'students')],
                 'relationship' => ['required', 'string', 'max:40'],
                 'full_name' => ['required', 'string', 'max:255'],
                 'phone' => ['nullable', 'string', 'max:40'],
@@ -141,7 +141,7 @@ class StudentRecordsController extends Controller
                 'nida_number' => ['sometimes', 'nullable', 'string', 'max:50'],
                 'address' => ['sometimes', 'nullable', 'string', 'max:255'],
                 'is_primary' => ['sometimes', 'boolean'],
-                'student_id' => ['sometimes', 'integer', 'exists:students,id'],
+                'student_id' => ['sometimes', 'integer', $this->tenantExists($request, 'students')],
             ]);
 
             if (isset($data['student_id'])) {
@@ -466,7 +466,7 @@ class StudentRecordsController extends Controller
         try {
             $schoolId = $this->schoolId($request);
             $data = $request->validate([
-                'student_id' => ['required', 'integer', 'exists:students,id'],
+                'student_id' => ['required', 'integer', $this->tenantExists($request, 'students')],
                 'title' => ['required', 'string', 'max:255'],
                 'document_type' => ['required', 'string', 'max:60'],
                 'file_name' => ['nullable', 'string', 'max:255'],
