@@ -7,7 +7,6 @@ use App\Models\School;
 use App\Models\User;
 use Database\Seeders\RolesTableSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Lcobucci\JWT\Encoding\ChainedFormatter;
 use Lcobucci\JWT\Encoding\JoseEncoder;
@@ -138,6 +137,59 @@ class OidcLoginTest extends TestCase
         $this->assertSame(['sso_error' => 'expired'], $this->fragment($response->headers->get('Location')));
     }
 
+    public function test_a_demo_sign_up_gets_an_account_in_the_configured_school(): void
+    {
+        config()->set('services.oidc.provision_school_code', 'ALPHA');
+        config()->set('services.oidc.apps', ['hr' => ['name' => 'HR & payroll', 'url' => 'https://demo-hr.example.test']]);
+
+        $fragment = $this->signIn(['sub' => 'kc-demo', 'email' => 'visitor@example.test', 'email_verified' => true,
+            'name' => 'Asha Mwita', 'groups' => ['/systems/school', '/systems/hr']]);
+
+        $user = User::query()->where('external_id', 'kc-demo')->firstOrFail();
+        $this->assertSame('visitor@example.test', $user->email);
+        $this->assertSame('Asha Mwita', $user->name);
+        $this->assertSame('school_admin', $user->role->name);
+        $this->assertSame($this->user->school_id, $user->school_id);
+
+        $this->postJson('/api/v1/auth/oidc/exchange', ['code' => $fragment['sso_code']])
+            ->assertOk()
+            ->assertJsonPath('sso.apps', [[
+                'key' => 'hr', 'name' => 'HR & payroll', 'url' => 'https://demo-hr.example.test/login?sso=1',
+            ]]);
+    }
+
+    public function test_no_account_is_created_without_the_school_system(): void
+    {
+        config()->set('services.oidc.provision_school_code', 'ALPHA');
+
+        $fragment = $this->signIn(['sub' => 'kc-demo', 'email' => 'visitor@example.test', 'email_verified' => true,
+            'groups' => ['/systems/erp']]);
+
+        $this->assertSame(['sso_error' => 'no_account'], $fragment);
+        $this->assertFalse(User::query()->where('email', 'visitor@example.test')->exists());
+    }
+
+    public function test_no_account_is_created_when_provisioning_is_off(): void
+    {
+        $fragment = $this->signIn(['sub' => 'kc-demo', 'email' => 'visitor@example.test', 'email_verified' => true,
+            'groups' => ['/systems/school']]);
+
+        $this->assertSame(['sso_error' => 'no_account'], $fragment);
+        $this->assertFalse(User::query()->where('email', 'visitor@example.test')->exists());
+    }
+
+    public function test_an_address_already_in_use_is_never_given_a_second_account(): void
+    {
+        config()->set('services.oidc.provision_school_code', 'ALPHA');
+        $this->user->forceFill(['external_id' => 'kc-original'])->save();
+
+        $fragment = $this->signIn(['sub' => 'kc-other', 'email' => 'admin@alpha.test', 'email_verified' => true,
+            'groups' => ['/systems/school']]);
+
+        $this->assertSame(['sso_error' => 'no_account'], $fragment);
+        $this->assertSame(1, User::query()->whereRaw('LOWER(email) = ?', ['admin@alpha.test'])->count());
+    }
+
     public function test_sso_routes_are_hidden_when_disabled(): void
     {
         config()->set('services.oidc.enabled', false);
@@ -178,8 +230,8 @@ class OidcLoginTest extends TestCase
     /** @param array<string, mixed> $claims */
     private function idToken(array $claims, ?string $audience, ?string $signingKey): string
     {
-        $now = new \DateTimeImmutable();
-        $builder = (new Builder(new JoseEncoder(), ChainedFormatter::default()))
+        $now = new \DateTimeImmutable;
+        $builder = (new Builder(new JoseEncoder, ChainedFormatter::default()))
             ->withHeader('kid', 'k1')
             ->issuedBy(self::ISSUER)
             ->permittedFor($audience ?? 'shengena-school')
@@ -192,7 +244,7 @@ class OidcLoginTest extends TestCase
             }
         }
 
-        return $builder->getToken(new Sha256(), InMemory::plainText($signingKey ?? $this->privateKey))->toString();
+        return $builder->getToken(new Sha256, InMemory::plainText($signingKey ?? $this->privateKey))->toString();
     }
 
     private function b64url(string $bytes): string

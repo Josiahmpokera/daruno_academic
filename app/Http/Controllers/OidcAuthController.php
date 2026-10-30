@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\LoginHistory;
+use App\Models\Role;
+use App\Models\School;
 use App\Models\User;
 use App\Services\Auth\OidcClient;
 use Illuminate\Http\RedirectResponse;
@@ -20,14 +22,19 @@ use Throwable;
  *    returns the browser to the portal with a one-time code in the URL fragment.
  * 3. POST /auth/oidc/exchange  swaps that code for the usual portal session.
  *
- * Accounts are never created here: a person signs in to the portal account that
- * already has their verified email, which is then linked to their identity.
+ * A person signs in to the portal account that already has their verified email,
+ * which is then linked to their identity. The one exception is a demo sign-up
+ * from the website: when services.oidc.provision_school_code is set and the token
+ * grants /systems/school, a person without an account gets one in that school.
  */
 class OidcAuthController extends AuthController
 {
     private const STATE_TTL = 600;
 
     private const CODE_TTL = 60;
+
+    /** Identity service groups that grant each Shengena system. */
+    private const SYSTEM_GROUPS = ['school' => '/systems/school', 'erp' => '/systems/erp', 'hr' => '/systems/hr'];
 
     public function config(OidcClient $oidc)
     {
@@ -74,7 +81,7 @@ class OidcAuthController extends AuthController
         }
 
         $code = Str::random(64);
-        Cache::put("oidc:code:$code", $user->id, self::CODE_TTL);
+        Cache::put("oidc:code:$code", ['user' => $user->id, 'apps' => $this->otherApps($claims)], self::CODE_TTL);
 
         return $this->backToPortal($oidc, ['sso_code' => $code]);
     }
@@ -84,7 +91,8 @@ class OidcAuthController extends AuthController
         abort_unless($oidc->enabled(), 404);
         $request->validate(['code' => ['required', 'string', 'size:64']]);
 
-        $user = User::query()->find(Cache::pull('oidc:code:'.$request->input('code')));
+        $pending = Cache::pull('oidc:code:'.$request->input('code'));
+        $user = is_array($pending) ? User::query()->find($pending['user']) : null;
         if (! $user) {
             return response()->json(['message' => 'This sign-in link has expired. Please try again.'], 401);
         }
@@ -93,7 +101,10 @@ class OidcAuthController extends AuthController
         $this->recordLogin($request, $user, $user->email, 'success');
 
         $response = $this->respondWithToken($token, $user);
-        $response->setData($response->getData(true) + ['sso' => ['logout_url' => $oidc->logoutUrl()]]);
+        $response->setData($response->getData(true) + ['sso' => [
+            'logout_url' => $oidc->logoutUrl(),
+            'apps' => $pending['apps'],
+        ]]);
 
         return $response;
     }
@@ -120,9 +131,72 @@ class OidcAuthController extends AuthController
         $user = User::query()->whereRaw('LOWER(email) = ?', [$email])->whereNull('external_id')->first();
         if ($user) {
             $user->forceFill(['external_id' => $subject])->save();
+
+            return $user;
         }
 
+        // Only an address no portal account uses at all (linked or not) gets a new one.
+        if (User::query()->whereRaw('LOWER(email) = ?', [$email])->exists()) {
+            return null;
+        }
+
+        return $this->provisionDemoUser($claims, $subject, $email);
+    }
+
+    /** @param array<string, mixed> $claims */
+    private function provisionDemoUser(array $claims, string $subject, string $email): ?User
+    {
+        $schoolCode = (string) config('services.oidc.provision_school_code', '');
+        if ($schoolCode === '' || ! $this->hasSystem($claims, 'school')) {
+            return null;
+        }
+        $school = School::query()->where('code', $schoolCode)->first();
+        $role = Role::query()->where('name', config('services.oidc.provision_role') ?: 'school_admin')->first();
+        if (! $school || ! $role || $role->name === 'super_admin') {
+            Log::warning('SSO provisioning is misconfigured', ['school' => $schoolCode]);
+
+            return null;
+        }
+
+        $name = trim((string) ($claims['name'] ?? '')) ?: $email;
+        $user = User::query()->create([
+            'school_id' => $school->id,
+            'role_id' => $role->id,
+            'name' => Str::limit($name, 120, ''),
+            'email' => $email,
+            // Never used: this person signs in through the identity service.
+            'password' => Str::password(40),
+        ]);
+        $user->forceFill(['external_id' => $subject])->save();
+        Log::info('SSO account created', ['user_id' => $user->id, 'school_id' => $school->id]);
+
         return $user;
+    }
+
+    /** @param array<string, mixed> $claims */
+    private function hasSystem(array $claims, string $system): bool
+    {
+        $groups = $claims['groups'] ?? [];
+
+        return is_array($groups) && in_array(self::SYSTEM_GROUPS[$system], $groups, true);
+    }
+
+    /**
+     * The other Shengena systems this person may use, for the portal's app menu.
+     *
+     * @param  array<string, mixed>  $claims
+     * @return list<array{key: string, name: string, url: string}>
+     */
+    private function otherApps(array $claims): array
+    {
+        $apps = [];
+        foreach ((array) config('services.oidc.apps') as $key => $app) {
+            if (($app['url'] ?? '') !== '' && $this->hasSystem($claims, $key)) {
+                $apps[] = ['key' => $key, 'name' => $app['name'] ?? $key, 'url' => $app['url'].'/login?sso=1'];
+            }
+        }
+
+        return $apps;
     }
 
     /** @param array<string, string> $params */

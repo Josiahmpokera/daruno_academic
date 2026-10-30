@@ -50,6 +50,17 @@ return [
         'redirect_uri' => env('OIDC_REDIRECT_URI'),
         // Portal origin the browser returns to after sign-in and sign-out.
         'portal_url' => rtrim((string) env('OIDC_PORTAL_URL', ''), '/'),
+        // Demo sign-ups: a verified person whose token carries the group /systems/school
+        // but who has no account yet gets one in this school, with this role.
+        // Empty school code: no accounts are created on sign-in.
+        'provision_school_code' => env('OIDC_PROVISION_SCHOOL_CODE', ''),
+        'provision_role' => env('OIDC_PROVISION_ROLE', 'school_admin'),
+        // The other Shengena systems, linked from the portal for people allowed to use them
+        // (token groups /systems/erp, /systems/hr). Empty: not linked.
+        'apps' => [
+            'erp' => ['name' => 'ERP', 'url' => rtrim((string) env('SHENGENA_ERP_URL', ''), '/')],
+            'hr' => ['name' => 'HR & payroll', 'url' => rtrim((string) env('SHENGENA_HR_URL', ''), '/')],
+        ],
     ],
 
 ];
