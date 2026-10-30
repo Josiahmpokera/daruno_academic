@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\V1\StudentRecordsController;
 use App\Http\Controllers\Api\V1\SubjectController;
 use App\Http\Controllers\Api\V1\SystemController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\OidcAuthController;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\Route;
 
@@ -56,6 +57,12 @@ Route::prefix('v1')
             Route::post('logout', [AuthController::class, 'logout'])->middleware('auth:api');
             Route::get('me', [AuthController::class, 'me'])->middleware('auth:api');
             Route::post('refresh', [AuthController::class, 'refresh'])->middleware('auth:api');
+
+            // Sign in with Shengena (single sign-on)
+            Route::get('oidc/config', [OidcAuthController::class, 'config']);
+            Route::get('oidc/redirect', [OidcAuthController::class, 'redirect'])->middleware('throttle:30,1');
+            Route::get('oidc/callback', [OidcAuthController::class, 'callback'])->middleware('throttle:30,1');
+            Route::post('oidc/exchange', [OidcAuthController::class, 'exchange'])->middleware('throttle:30,1');
         });
 
         Route::get('modules', [ModuleCatalogController::class, 'index']);

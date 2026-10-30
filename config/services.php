@@ -35,4 +35,21 @@ return [
         ],
     ],
 
+    /*
+     * Shengena identity (Keycloak, OpenID Connect). Sign-in with Shengena is
+     * offered only when OIDC_ENABLED=true and the issuer and client are set.
+     */
+    'oidc' => [
+        'enabled' => (bool) env('OIDC_ENABLED', false),
+        // e.g. https://id.shengena.cloud/realms/shengena
+        'issuer' => rtrim((string) env('OIDC_ISSUER', ''), '/'),
+        // Where this server reaches the issuer, if different (e.g. inside Docker).
+        'internal_issuer' => rtrim((string) env('OIDC_INTERNAL_ISSUER', ''), '/'),
+        'client_id' => env('OIDC_CLIENT_ID', 'shengena-school'),
+        'client_secret' => env('OIDC_CLIENT_SECRET'),
+        'redirect_uri' => env('OIDC_REDIRECT_URI'),
+        // Portal origin the browser returns to after sign-in and sign-out.
+        'portal_url' => rtrim((string) env('OIDC_PORTAL_URL', ''), '/'),
+    ],
+
 ];
